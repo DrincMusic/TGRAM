@@ -1,0 +1,19 @@
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    container_name: rlmgraph-demo-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/rlmgraph-demo
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - rlmgraph-demo-data:/data
+
+volumes:
+  rlmgraph-demo-data:

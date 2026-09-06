@@ -1,0 +1,40 @@
+name: Verify baseline
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.1"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install locked Python environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+          .\.venv\Scripts\python.exe -m pip install --no-deps -e .
+      - name: Install locked Observer environment
+        run: npm --prefix dashboard ci
+      - name: Run unified verification
+        shell: pwsh
+        run: .\scripts\verify.ps1
+      - name: Retain verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-logs
+          path: .verification/*.log
+          if-no-files-found: warn
