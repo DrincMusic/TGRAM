@@ -1,40 +1,83 @@
-name: Verify baseline
+name: Verify TGRAM
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  verify:
+  python:
+    name: Python tests (${{ matrix.shard }})
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12.10"
           cache: pip
+      - name: Install locked Python environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+          .\.venv\Scripts\python.exe -m pip install --no-deps -e .
+      - name: Python lint
+        run: .\.venv\Scripts\python.exe -m ruff check .
+      - name: Run offline tests
+        run: .\.venv\Scripts\python.exe scripts/ci_pytest.py --shard ${{ matrix.shard }}
+      - name: Retain test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-${{ matrix.shard }}
+          path: |
+            .verification/*.log
+            .verification/*.xml
+          include-hidden-files: true
+          retention-days: 3
+          if-no-files-found: warn
+
+  dashboard:
+    name: Dashboard checks
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24.11.1"
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
-      - name: Install locked Python environment
-        shell: pwsh
-        run: |
-          python -m venv .venv
-          .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
-          .\.venv\Scripts\python.exe -m pip install --no-deps -e .
-      - name: Install locked Observer environment
-        run: npm --prefix dashboard ci
-      - name: Run unified verification
-        shell: pwsh
-        run: .\scripts\verify.ps1
-      - name: Retain verification logs
-        if: always()
+      - name: Select supported npm version
+        run: npm install --global npm@10.8.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Frontend lint
+        run: npm run lint
+      - name: Source contract tests
+        run: npm run test:source
+      - name: Build
+        run: npm run build
+      - name: Install test browser
+        run: npx playwright install chromium
+      - name: Browser workflow tests
+        run: npx playwright test --reporter=line,github
+      - name: Retain browser diagnostics
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: verification-logs
-          path: .verification/*.log
+          name: browser-failures
+          path: dashboard/test-results/
+          retention-days: 3
           if-no-files-found: warn

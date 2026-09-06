@@ -269,3 +269,6 @@ def test_draft_is_checked_before_response_or_memory_commit(tmp_path):
     result = chat._conversation_reply(interpretation, None, None, "A velvet compass?", memory)
     assert result["route"] == "RLM_RECOVERY"
     assert "Wrong draft" not in result["answer"]
+
+
+pytestmark = pytest.mark.usefixtures("offline_chat_adapter")

@@ -171,3 +171,6 @@ def test_direct_fix_request_preserves_action_and_selected_task_reuses_ticket(set
     repeated = controller.handle("start this task", "P1", ticket.id, "USER")
     assert repeated["ticket_id"] == ticket.id
     assert len(store.project_tickets()) == 1
+
+
+pytestmark = pytest.mark.usefixtures("offline_chat_adapter")

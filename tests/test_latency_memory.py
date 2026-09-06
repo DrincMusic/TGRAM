@@ -1,3 +1,5 @@
+import pytest
+
 from rlmgraph.latency_memory import ChatTiming, latency_observations, record_latency
 from rlmgraph.model_call_ledger import ModelCallLedger, scoped_model_call_ledger
 from rlmgraph.observer_chat import ObserverChat
@@ -50,3 +52,6 @@ def test_safe_reply_records_completed_measurement(tmp_path, monkeypatch):
         result = chat.safe_reply("Hello", [], None, None, profile_id="owner")
         assert "ANSWER_REVIEW" in result["latency_measurement"]["stages_ms"]
         assert latency_observations("owner")["sample_count"] == 1
+
+
+pytestmark = pytest.mark.usefixtures("offline_chat_adapter")

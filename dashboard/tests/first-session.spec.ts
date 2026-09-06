@@ -1,5 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const testProfile = { id: "test-profile", name: "Test user", owns_legacy_memory: true };
+const modelSettings = { roles: [], available_models: [], providers: {} };
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((profile) => {
+    sessionStorage.setItem("tgram-profile-session", JSON.stringify({ profile, token: "test-only-session" }));
+  }, testProfile);
+});
+
 const project = {
   id: "P1",
   node_type: "project",
@@ -67,6 +76,7 @@ const plan = {
   project_id: "P1",
   project_name: "checkout-pilot",
   prompt: ticket.description,
+  answer: "Update the shipping threshold and verify boundary cases.",
   affected_paths: ["checkout/pricing.py", "tests/test_pricing.py"],
   approval_status: "PENDING",
   approval_history: [],
@@ -145,6 +155,8 @@ const projectOption = {
   name: "checkout-pilot",
   root: project.root,
   organization: "Personal",
+  execution_mode: "PROTECTED",
+  project_goals: [],
   ideas: [] as {
     id: string;
     title: string;
@@ -233,6 +245,9 @@ async function mockApi(page: Page, initial = base()) {
   await page.route("http://127.0.0.1:8787/api/**", async (route) => {
     const req = route.request(),
       path = new URL(req.url()).pathname;
+    if (path === "/api/profiles") return route.fulfill({ json: { profiles: [testProfile] } });
+    if (path === "/api/profiles/me") return route.fulfill({ json: { profile: testProfile } });
+    if (path === "/api/models") return route.fulfill({ json: modelSettings });
     if (req.method() === "GET" && path === "/api/snapshot")
       return route.fulfill({ json: state });
     if (req.method() === "GET" && path === "/api/workspace/options")
@@ -524,6 +539,7 @@ test("self-investigation requires explicit user direction before creating govern
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(page.getByText(/overweights workflow infrastructure/)).toBeVisible();
+  await page.locator(".chat-message.assistant").getByText("Response details and evidence").click();
   await expect(page.getByText("Evidence scope: SYSTEM")).toBeVisible();
   expect(ctl.ticketCreateBodies).toHaveLength(0);
 
@@ -556,9 +572,11 @@ test("self-investigation requires explicit user direction before creating govern
 test("complete workflow remains direct navigation, transparent, keyboard operable, and persistent", async ({
   page,
 }) => {
-  await mockApi(page);
+  const ctl = await mockApi(page);
   await page.goto("/");
   await expect(page.getByRole("tab", { name: /Overview/ })).toBeVisible();
+  await expect(page.getByText("No local project is connected.")).toBeVisible();
+  await page.getByRole("tab", { name: /Projects/ }).click();
   await expect(
     page.getByRole("group", { name: "Selected project" }),
   ).toBeVisible();
@@ -569,20 +587,19 @@ test("complete workflow remains direct navigation, transparent, keyboard operabl
   await expect(page.getByLabel("Active work context")).toContainText(
     "No project selected",
   );
-  await expect(page.getByText("No local project is connected.")).toBeVisible();
-  await page.getByRole("tab", { name: /Projects/ }).click();
   await expect(
-    page.getByText(/indexes supported source files without changing them/i),
+    page.getByText(/selected folder becomes the boundary/i),
   ).toBeVisible();
   await page.getByRole("button", { name: "Browse for project folder" }).click();
   await expect(page.getByLabel("Folder path")).toHaveValue(project.root);
   await expect(page.getByRole("status")).toContainText(
     "Nothing has been read or connected yet",
   );
-  await page.getByRole("button", { name: "Connect project" }).press("Enter");
+  await page.getByRole("button", { name: "Connect existing project" }).press("Enter");
   await expect(page.getByRole("status")).toContainText("indexed read-only");
   await page.getByRole("tab", { name: /Tickets/ }).click();
   const create = page.locator(".ticket-create");
+  await create.locator("summary").first().click();
   await create.getByText("Limits and defaults").click();
   await expect(create).toContainText(
     "implementation runs in an isolated copy; applying reviewed files requires a separate approval",
@@ -594,13 +611,24 @@ test("complete workflow remains direct navigation, transparent, keyboard operabl
   await expect(page.getByLabel("Active work context")).toContainText(
     ticket.title,
   );
-  await page.getByRole("button", { name: "Implement ticket" }).click();
-  await expect(page.getByRole("status")).toContainText(
-    "Ticket implemented, applied, and reconciled",
-  );
-  await expect(page.getByLabel("Active work context")).toContainText(
-    "None selected",
-  );
+  const next = page.getByRole("region", { name: "Next ticket step" });
+  await next.getByRole("button", { name: "Create plan" }).click();
+  await next.getByRole("button", { name: "Read proposed plan" }).click();
+  await next.getByRole("button", { name: "Approve plan", exact: true }).click();
+  await expect(next).toContainText("Step 3");
+  await next.getByRole("button", { name: "Start implementation in isolated copy" }).click();
+  await next.getByRole("button", { name: "Review changes and validation" }).click();
+  await page.getByRole("button", { name: "Approve and apply change" }).click();
+  await expect(page.getByRole("status")).toContainText("Approved files applied");
+  await page.getByRole("button", { name: "Refresh project index", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Project index refreshed");
+  await next.getByRole("button", { name: "Mark task satisfied" }).click();
+  await next.getByRole("button", { name: "Close ticket" }).click();
+  await expect.poll(() => ctl.get().nodes.find((node) => node.id === ticket.id)?.status).toBe("CLOSED");
+  await expect(next).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("tab", { name: /Tickets/ }).click();
+  await expect(next).toHaveCount(0);
 });
 
 test("plan and apply rejections are distinct and do not expose an apply action", async ({
@@ -609,9 +637,10 @@ test("plan and apply rejections are distinct and do not expose an apply action",
   const ctl = await mockApi(page, base([project, ticket, plan]));
   await page.goto("/");
   await page.getByRole("tab", { name: /Tickets/ }).click();
-  await page.getByText("Technical details and audit history").click();
-  await page.getByRole("button", { name: "Reject plan" }).click();
-  await page.getByLabel("Decision reason").fill("Revision required.");
+  await page.getByRole("button", { name: /Plan and implementation/ }).click();
+  await page.getByRole("button", { name: "Read proposed plan" }).click();
+  await page.locator(".ticket-next-step").getByRole("button", { name: "Reject plan", exact: true }).click();
+  await page.getByLabel("Why should the plan change?").fill("Revision required.");
   await page.getByRole("button", { name: "Record rejection" }).click();
   expect((ctl.get().nodes.at(-1) as typeof plan).approval_status).toBe(
     "DENIED",
@@ -619,7 +648,7 @@ test("plan and apply rejections are distinct and do not expose an apply action",
   ctl.set(base([project, ticket, plan, attempt]));
   await page.reload();
   await page.getByRole("tab", { name: /Tickets/ }).click();
-  await page.getByText("Technical details and audit history").click();
+  await page.getByRole("button", { name: /Plan and implementation/ }).click();
   await page.getByRole("button", { name: "Reject change" }).click();
   expect((ctl.get().nodes.at(-1) as typeof attempt).promotion_approval).toEqual(
     { decision: "DENIED" },
@@ -637,12 +666,12 @@ test("projects manage durable manifests, ideas, and local organizations", async 
   await page.getByRole("tab", { name: /Projects/ }).click();
 
   await expect(
-    page.getByRole("heading", { name: "Manifests, ideas, and organizations" }),
+    page.getByRole("heading", { name: "Project manifest, goals, ideas, and organizations" }),
   ).toBeVisible();
-  await expect(page.getByText("INDEX MANIFEST")).toBeVisible();
-  await expect(page.locator(".manifest-card")).toContainText(project.root);
+  await expect(page.getByLabel("Project index metadata")).toContainText("Read-only index");
+  await expect(page.locator(".manifest-location")).toContainText(project.root);
 
-  await page.getByRole("tab", { name: /Ideas/ }).click();
+  await page.getByLabel("Project document").selectOption("ideas");
   await page.getByRole("button", { name: "Suggest ideas" }).click();
   await expect(
     page.getByRole("heading", { name: "Explain the shipping threshold" }),
@@ -684,7 +713,7 @@ test("projects manage durable manifests, ideas, and local organizations", async 
     "aria-selected",
     "true",
   );
-  await expect(page.getByLabel("Title")).toHaveValue(
+  await expect(page.getByLabel("Title", { exact: true })).toHaveValue(
     "Clarify shipping thresholds",
   );
 
@@ -716,6 +745,7 @@ test("interruption and terminal failure state what happened and how to continue"
   ];
   const ctl = await mockApi(page, interrupted);
   await page.goto("/");
+  await page.getByRole("tab", { name: /Runs/ }).click();
   await expect(page.getByLabel("Active work context")).toContainText(
     "Recovery needed",
   );
@@ -739,10 +769,13 @@ test("interruption and terminal failure state what happened and how to continue"
   );
   await page.reload();
   await page.getByRole("tab", { name: /Tickets/ }).click();
-  await page.getByText("Technical details and audit history").click();
-  await expect(page.getByRole("alert")).toContainText(
-    "No files were applied; open this result for details or discard it",
-  );
+  await page.getByRole("button", { name: /Plan and implementation/ }).click();
+  const next = page.getByRole("region", { name: "Next ticket step" });
+  await expect(next).toContainText("Implementation failed · task still open");
+  await expect(next).toContainText("Validation command exited unsuccessfully");
+  await next.getByRole("button", { name: "Read failure details" }).click();
+  await expect(next.getByRole("button", { name: "Request replacement plan" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve and apply change" })).toHaveCount(0);
 });
 
 test("a blocking action error explains the failure without advancing authority", async ({
@@ -757,20 +790,24 @@ test("a blocking action error explains the failure without advancing authority",
   );
   await page.goto("/");
   await page.getByRole("tab", { name: /Tickets/ }).click();
-  await page.getByText("Technical details and audit history").click();
-  await page
-    .getByRole("button", { name: "Approve and implement in sandbox" })
+  await page.getByRole("button", { name: /Plan and implementation/ }).click();
+  await page.getByRole("button", { name: "Read proposed plan" }).click();
+  await page.locator(".ticket-next-step")
+    .getByRole("button", { name: "Approve plan", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText(
     "Plan approval is blocked because its source changed",
   );
-  await expect(page.getByRole("button", { name: "Start run" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Start implementation in isolated copy" })).toHaveCount(0);
 });
 
 test("loading and retryable service errors are announced", async ({ page }) => {
   let calls = 0;
   await page.route("http://127.0.0.1:8787/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/profiles") return route.fulfill({ json: { profiles: [testProfile] } });
+    if (path === "/api/profiles/me") return route.fulfill({ json: { profile: testProfile } });
+    if (path === "/api/models") return route.fulfill({ json: modelSettings });
     if (path === "/api/snapshot") {
       calls++;
       if (calls === 1) {
@@ -800,12 +837,12 @@ test("narrow viewport preserves direct navigation, context, and visible focus", 
   await page.setViewportSize({ width: 375, height: 740 });
   await mockApi(page, base([project, ticket, plan, attempt]));
   await page.goto("/");
-  await expect(page.getByLabel("Active work context")).toBeVisible();
   const ticketsTab = page.getByRole("tab", { name: /Tickets/ });
   await ticketsTab.focus();
   await expect(ticketsTab).toBeFocused();
   await expect(ticketsTab).toBeInViewport();
   await ticketsTab.press("Enter");
+  await expect(page.getByLabel("Active work context")).toBeVisible();
   await expect(page.getByText("CURRENT STATE").first()).toBeVisible();
 });
 
@@ -815,7 +852,7 @@ test("run result moves coherently to exact files and validation detail", async (
   await mockApi(page, base([project, ticket, plan, attempt]));
   await page.goto("/");
   await page.getByRole("tab", { name: /Tickets/ }).click();
-  await page.getByText("Technical details and audit history").click();
+  await page.getByRole("button", { name: /Plan and implementation/ }).click();
   await page
     .getByText("Review files, validation, and recorded authority →")
     .click();
@@ -823,6 +860,7 @@ test("run result moves coherently to exact files and validation detail", async (
     "aria-selected",
     "true",
   );
-  await expect(page.getByText("checkout/pricing.py").first()).toBeVisible();
-  await expect(page.getByText(/PASSED · pytest -q/).first()).toBeVisible();
+  const inspect = page.getByRole("complementary").filter({ has: page.getByRole("heading", { name: "Validated proposal" }) });
+  await expect(inspect.getByText("checkout/pricing.py").first()).toBeVisible();
+  await expect(inspect.getByText(/PASSED · pytest -q/).first()).toBeVisible();
 });
