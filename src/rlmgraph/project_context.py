@@ -36,7 +36,11 @@ class ProjectContextCompiler:
     ) -> CompiledTaskContext:
         compact_memories: list[dict] = []
         used = 2
-        for memory in memories:
+        ranked_memories = sorted(
+            enumerate(memories),
+            key=lambda item: (-self._relevance(item[1]), item[0]),
+        )
+        for _, memory in ranked_memories:
             allowed = {
                 key: memory[key]
                 for key in (
@@ -119,3 +123,10 @@ class ProjectContextCompiler:
             prompt=prompt, characters=len(prompt), estimated_tokens=max(1, (len(prompt) + 3) // 4),
             memory_count=len(compact_memories),
         )
+
+    @staticmethod
+    def _relevance(memory: dict) -> float:
+        value = memory.get("relevance", 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0.0
+        return float(value)
