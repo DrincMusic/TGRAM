@@ -13,6 +13,7 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel
 
+from .codex_executable import CODEX_EXECUTABLE_ENV_VARS, resolve_codex_executable
 from .model_call_ledger import estimate_tokens, exact_tokens, model_call_ledger
 from .models import (
     Claim,
@@ -36,6 +37,16 @@ from .models import (
 
 DEFAULT_CODEX_SANDBOX = "danger-full-access" if os.name == "nt" else "read-only"
 DEFAULT_CODEX_REPAIR_SANDBOX = "danger-full-access" if os.name == "nt" else "workspace-write"
+
+
+def _resolve_adapter_codex(executable: str) -> str:
+    # Preserve the existing shutil.which seam used by offline adapter tests while allowing
+    # explicit environment overrides and Store-package discovery in real installations.
+    if not any(os.environ.get(name, "").strip() for name in CODEX_EXECUTABLE_ENV_VARS):
+        resolved = shutil.which(executable)
+        if resolved:
+            return resolved
+    return resolve_codex_executable(executable)
 
 
 class Investigator(Protocol):
@@ -233,10 +244,7 @@ class CodexCliInvestigator:
         sandbox: str | None = None,
         investigation_timeout_seconds: float | None = 900,
     ) -> None:
-        resolved = shutil.which(executable)
-        if resolved is None:
-            raise FileNotFoundError(f"Codex CLI executable not found: {executable}")
-        self.executable = resolved
+        self.executable = _resolve_adapter_codex(executable)
         self.model = model
         self.sandbox = sandbox or DEFAULT_CODEX_SANDBOX
         self.investigation_timeout_seconds = investigation_timeout_seconds
@@ -965,10 +973,7 @@ class CodexProjectIdeaSuggester:
     max_wall_time_seconds = 120
 
     def __init__(self, executable: str = "codex", model: str | None = None) -> None:
-        resolved = shutil.which(executable)
-        if resolved is None:
-            raise FileNotFoundError(f"Codex CLI executable not found: {executable}")
-        self.executable = resolved
+        self.executable = _resolve_adapter_codex(executable)
         self.model = model
         self.sandbox = "read-only"
         self.last_authorized_paths: list[str] = []

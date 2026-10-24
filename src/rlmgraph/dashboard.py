@@ -20,6 +20,7 @@ from .adapters import (
     HttpStructuredLanguageAdapter,
 )
 from .automatic_tickets import AutomaticTicketRunner
+from .codex_executable import resolve_codex_executable
 from .conversation_benchmark import (
     ConversationBenchmarkController,
     ConversationBenchmarkStore,
@@ -2947,11 +2948,14 @@ def serve(host: str = "127.0.0.1", port: int = 8787, store=None) -> None:
     if not implementation_executable and os.name == "nt":
         bridge = project_root / "scripts" / "codex_wsl_bridge.cmd"
         implementation_executable = str(bridge) if bridge.is_file() else "codex"
+    implementation_executable = resolve_codex_executable(
+        implementation_executable or "codex"
+    )
     sandbox_controller = InteractiveSandboxController(
         ImplementationSandboxManager(
             store,
             CodexPlanImplementationWorker(
-                implementation_executable or "codex",
+                implementation_executable,
                 model=os.environ.get("RLMGRAPH_IMPLEMENTATION_MODEL") or "gpt-5.6-sol",
                 reasoning_effort=(
                     os.environ.get("RLMGRAPH_IMPLEMENTATION_REASONING_EFFORT") or "max"

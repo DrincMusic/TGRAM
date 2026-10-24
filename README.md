@@ -11,6 +11,16 @@ The supported development baseline is Windows with Python 3.12 and Node.js 24.11
 account. Select the Codex CLI provider and a model available to your account in TGRAM's
 model settings; this route does not require an API key.
 
+TGRAM resolves Codex CLI at startup instead of storing a versioned installation path. An
+explicit executable argument is authoritative. Otherwise it checks
+`RLMGRAPH_CODEX_EXECUTABLE` and `TGRAM_CODEX_EXECUTABLE`, then
+`codex`/`codex.exe`/`codex.cmd` on `PATH`. The implementation worker also retains its
+existing, scoped `RLMGRAPH_IMPLEMENTATION_EXECUTABLE` override.
+On Windows it can also discover the CLI bundled with the currently installed official
+OpenAI Codex package. A stale explicit override fails with the configured path and repair
+instructions; TGRAM does not silently replace it. This keeps deliberate wrappers and `.cmd`
+shims intact while allowing ordinary installations to survive an app-package version update.
+
 From the repository root:
 
 ```powershell
